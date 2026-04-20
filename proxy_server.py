@@ -42,6 +42,49 @@ def recv_until_header_end(sock):
 
     return data
 
+
+def read_chunked_body(sock, body_part):
+    full_body = body_part
+    decoded_body = b""
+
+    while True:
+        # Read until we have a full chunk-size line
+        while b"\r\n" not in full_body:
+            chunk = sock.recv(BUFFER_SIZE)
+            if not chunk:
+                return None
+            full_body += chunk
+
+        line, full_body = full_body.split(b"\r\n", 1)
+
+        try:
+            chunk_size = int(line.decode("iso-8859-1").strip(), 16)
+        except ValueError:
+            return None
+
+        # Last chunk
+        if chunk_size == 0:
+            # Need final CRLF after 0-size chunk, and maybe trailers
+            while b"\r\n\r\n" not in full_body and full_body != b"\r\n":
+                chunk = sock.recv(BUFFER_SIZE)
+                if not chunk:
+                    break
+                full_body += chunk
+            return decoded_body
+
+        # Read until the whole chunk + trailing CRLF is present
+        needed = chunk_size + 2
+        while len(full_body) < needed:
+            chunk = sock.recv(BUFFER_SIZE)
+            if not chunk:
+                return None
+            full_body += chunk
+
+        decoded_body += full_body[:chunk_size]
+        full_body = full_body[chunk_size + 2:]
+
+
+
 # Read one full HTTP request:
 # headers + body (if Content-Length exists)
 def read_http_request(client_socket):
@@ -74,16 +117,22 @@ def read_http_request(client_socket):
             break
         if ":" in line:
             name, value = line.split(":", 1)
-            headers[name.strip()] = value.strip()
+            headers[name.strip().lower()] = value.strip()
+
+    transfer_encoding = headers.get("transfer-encoding", "").lower()
+    if "chunked" in transfer_encoding:
+        body = read_chunked_body(client_socket, body_part)
+        if body is None:
+            return None
+        return request_line, headers, body
 
     content_length = 0
-    if "Content-Length" in headers:
+    if "content-length" in headers:
         try:
-            content_length = int(headers["Content-Length"])
+            content_length = int(headers["content-length"])
         except ValueError:
             content_length = 0
 
-    # If body is incomplete, keep reading
     while len(body_part) < content_length:
         chunk = client_socket.recv(BUFFER_SIZE)
         if not chunk:
@@ -91,7 +140,6 @@ def read_http_request(client_socket):
         body_part += chunk
 
     return request_line, headers, body_part[:content_length]
-
 
 # Parse "host:port" authority string
 # Used for CONNECT and Host header parsing
@@ -127,18 +175,19 @@ def parse_request_line(request_line):
 # - remote port
 # - path to send to origin server
 def get_destination_for_http(target, headers):
-    # Case 1: absolute-form URL from browser/proxy-aware client
-    if target.startswith("http://") or target.startswith("https://"):
+    # HTTPS should use CONNECT, not normal HTTP forwarding
+    if target.startswith("https://"):
+        return None, None, None
+
+    # Absolute-form URL
+    if target.startswith("http://"):
         parsed = urlsplit(target)
 
         host = parsed.hostname
         if not host:
             return None, None, None
 
-        if parsed.port is not None:
-            port = parsed.port
-        else:
-            port = 80 if parsed.scheme == "http" else 443
+        port = parsed.port if parsed.port is not None else 80
 
         path = parsed.path if parsed.path else "/"
         if parsed.query:
@@ -146,8 +195,8 @@ def get_destination_for_http(target, headers):
 
         return host, port, path
 
-    # Case 2: origin-form path, so Host header must tell us destination
-    host_header = headers.get("Host")
+    # Origin-form path, destination comes from Host header
+    host_header = headers.get("host")
     if not host_header:
         return None, None, None
 
@@ -155,8 +204,6 @@ def get_destination_for_http(target, headers):
     path = target if target else "/"
 
     return host, port, path
-
-
 
 # Rebuild an HTTP request before forwarding it
 # Important:
@@ -166,22 +213,18 @@ def get_destination_for_http(target, headers):
 def build_forward_request(method, path, version, headers, body, host, port):
     new_headers = dict(headers)
 
-    # Remove proxy-specific / connection-management headers
-    if "Proxy-Connection" in new_headers:
-        del new_headers["Proxy-Connection"]
-    if "Connection" in new_headers:
-        del new_headers["Connection"]
-    if "Keep-Alive" in new_headers:
-        del new_headers["Keep-Alive"]
+    if "proxy-connection" in new_headers:
+        del new_headers["proxy-connection"]
+    if "connection" in new_headers:
+        del new_headers["connection"]
+    if "keep-alive" in new_headers:
+        del new_headers["keep-alive"]
+    if "transfer-encoding" in new_headers:
+        del new_headers["transfer-encoding"]
 
-    # Force a simpler one-request-per-connection behavior
-    new_headers["Connection"] = "close"
-
-    # Make sure Host header exists
-    if port == 80:
-        new_headers["Host"] = host
-    else:
-        new_headers["Host"] = f"{host}:{port}"
+    new_headers["connection"] = "close"
+    new_headers["content-length"] = str(len(body))
+    new_headers["host"] = host if port == 80 else f"{host}:{port}"
 
     request_line = f"{method} {path} {version}\r\n"
 
@@ -191,7 +234,6 @@ def build_forward_request(method, path, version, headers, body, host, port):
 
     raw_request = (request_line + header_lines + "\r\n").encode("iso-8859-1") + body
     return raw_request
-
 
 # Relay all response bytes from remote server to client
 # Used for normal HTTP
@@ -223,7 +265,7 @@ def handle_http_request(client_socket, client_address, method, target, version, 
 
         relay_http_response(remote_socket, client_socket)
 
-    except Exception as e:
+    except Exception:
         send_error_response(client_socket, 502, "Bad Gateway", f"Error contacting {host}:{port}")
     finally:
         if remote_socket:
@@ -287,7 +329,7 @@ def handle_connect_tunnel(client_socket, client_address, target):
         # Proxy only copies encrypted bytes.
         tunnel_data(client_socket, remote_socket)
 
-    except Exception as e:
+    except Exception:
         send_error_response(client_socket, 502, "Bad Gateway", f"Could not open tunnel to {host}:{port}")
     finally:
         if remote_socket:
@@ -311,21 +353,23 @@ def handle_client(client_socket, client_address):
             send_error_response(client_socket, 400, "Bad Request", "Invalid request line.")
             return
 
+        # HTTPS in normal URL form should not be forwarded as plain HTTP
+        if method != "CONNECT" and target.startswith("https://"):
+            send_error_response(client_socket, 400, "Bad Request", "HTTPS requests must use CONNECT.")
+            return
+
         if method == "CONNECT":
             handle_connect_tunnel(client_socket, client_address, target)
-        elif method in {"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "PATCH"}:
-            handle_http_request(client_socket, client_address, method, target, version, headers, body)
         else:
-            send_error_response(client_socket, 501, "Not Implemented", f"Method {method} not supported.")
+            handle_http_request(client_socket, client_address, method, target, version, headers, body)
 
-    except Exception as e:
+    except Exception:
         try:
             send_error_response(client_socket, 500, "Internal Server Error", "Proxy internal error.")
         except Exception:
             pass
     finally:
         client_socket.close()
-
 
 
 # Start proxy server
@@ -343,3 +387,5 @@ def start_proxy():
 
 if __name__ == "__main__":
     start_proxy()
+
+
