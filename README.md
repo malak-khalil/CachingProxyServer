@@ -4,7 +4,7 @@ A multithreaded HTTP/HTTPS proxy server with content caching, blacklisting, and 
 ## Team Members & Contributions
 | Member | Requirements |
 |--------|--------------|
-| **Aya** | Multithreading (D), Blacklist/Whitelist (G), Admin Interface (I), integration, testing |
+| **Aya** | Multithreading (D), Blacklist/Whitelist (G), Admin Interface (I), testing |
 | **Talia** | Logging (E), Content Caching (F), HTTPS Tunnel (H) |
 | **Malak** | Basic forwarding (A), Socket programming (B), Request parsing (C), testing |
 ## Features – Complete (A–I, including bonuses)
