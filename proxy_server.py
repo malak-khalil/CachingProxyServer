@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from proxy_logger import ProxyLogger   # Talia's logging module
 from proxy_cache import ProxyCache      # Talia's caching module
 from https_tunnel import handle_https_connect  # Talia's HTTPS tunnel module
+from https_mitm import handle_https_mitm #Talia's MIM decryption
 
 
 #  CONFIGURATION 
@@ -548,7 +549,15 @@ def handle_client(client_socket, client_address):
                 if connect_host is None or connect_port is None:
                     send_error_response(client_socket, 400, "Bad Request", "Invalid CONNECT target.")
                     break
-                handle_https_connect(client_socket, client_address, connect_host, connect_port, logger=logger)
+
+                handle_https_mitm(
+                    client_sock=client_socket,
+                    client_addr=client_address,
+                    target_host=connect_host,
+                    target_port=connect_port,
+                    logger=logger,
+                    timeout=SOCKET_TIMEOUT
+                )
                 break
             
             if handle_http_request(client_socket, client_address, method, target, version, headers, body, origin_connections):
