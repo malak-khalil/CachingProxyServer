@@ -1,5 +1,7 @@
 import socket
 import select
+from proxy_logger import ProxyLogger
+from proxy_cache import ProxyCache
 from urllib.parse import urlsplit
 
 # Configuration constants
@@ -7,6 +9,9 @@ LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 8888
 BUFFER_SIZE = 4096
 SOCKET_TIMEOUT = 10
+#Talia: Initialize the logger and cache instances at the module level so they can be used across all client handlers.
+logger = ProxyLogger("logs/proxy.log.jsonl")
+cache = ProxyCache(default_ttl=60, max_entries=256)
 
 
 # Send a simple HTTP error response
@@ -434,13 +439,47 @@ def close_origin_socket(origin_connections, key):
 # browser -> proxy -> target server -> proxy -> browser
 def handle_http_request(client_socket, client_address, method, target, version, headers, body, origin_connections):
     host, port, path = get_destination_for_http(target, headers)
+    client_ip, client_port = client_address
+
 
     if not host:
         send_error_response(client_socket, 400, "Bad Request", "Could not determine target host.")
         return True
+    
+    #Talia: Log the incoming HTTP request before processing it
+    logger.log_request(client_ip, client_port, host, port, method, target)
 
     client_keep_alive = should_keep_alive_request(version, headers)
     forward_request = build_forward_request(method, path, version, headers, body, host, port)
+
+    #Talia: Check the cache for a valid entry before contacting the origin server.
+    cache_status = "BYPASS"
+
+    if cache.should_cache_request(method):
+        cache_key = cache.build_cache_key(method, host, port, path)
+        cache_entry = cache.get(cache_key)
+
+        if cache_entry is not None:
+            logger.log_cache_event("cache_hit", target, host, port, "Served from cache")
+
+            client_socket.sendall(cache_entry.response_bytes)
+
+            logger.log_response(
+                client_ip,
+                client_port,
+                host,
+                port,
+                method,
+                target,
+                cache_entry.status_code,
+                "HIT",
+                "HTTP response sent from cache"
+            )
+
+            return not client_keep_alive
+        else:
+            cache_status = "MISS"
+            logger.log_cache_event("cache_miss", target, host, port, "Fetching from origin")
 
     connection_key = (host, port)
 
@@ -459,6 +498,7 @@ def handle_http_request(client_socket, client_address, method, target, version, 
                 return True
 
         try:
+            
             remote_socket.sendall(forward_request)
 
             status_line, response_headers, response_body, origin_keep_alive, status_code = read_http_response(
@@ -477,14 +517,44 @@ def handle_http_request(client_socket, client_address, method, target, version, 
                 status_code
             )
 
+           #Talia: If the response is cacheable, store it in the cache before sending it to the client. 
+            if cache.should_cache_request(method):
+                stored = cache.put(cache_key, response_bytes)
+                if stored:
+                    logger.log_cache_event("cache_store", target, host, port, "Stored response in cache")
+                    
             client_socket.sendall(response_bytes)
+
+            #Talia: Log the response status after sending it.
+            logger.log_response(
+                client_ip,
+                client_port,
+                host,
+                port,
+                method,
+                target,
+                status_code,
+                cache_status,
+                "HTTP response sent to client"
+            )
 
             if not origin_keep_alive:
                 close_origin_socket(origin_connections, connection_key)
 
             return not client_keep_alive
 
-        except Exception:
+        except Exception as e:
+            #Talia: Log any errors that occur during the HTTP handling process, including details about the client and target server.
+            logger.log_error(
+                message="HTTP handling failed",
+                error=str(e),
+                client_ip=client_ip,
+                client_port=client_port,
+                target_host=host,
+                target_port=port,
+                method=method,
+                url=target
+            )
             close_origin_socket(origin_connections, connection_key)
 
             if attempt == 1:
@@ -546,13 +616,44 @@ def handle_connect_tunnel(client_socket, client_address, target):
         ).encode("iso-8859-1")
         client_socket.sendall(response)
 
+        #Talia: Log the successful establishment of the HTTPS tunnel, including client and target details.
+        logger.log_https_event(
+            event="https_tunnel_started",
+            client_ip=client_address[0],
+            client_port=client_address[1],
+            target_host=host,
+            target_port=port,
+            message="CONNECT tunnel established successfully"
+        )
+
         # After this point TLS handshake is between browser and destination server.
         # Proxy only copies encrypted bytes.
         tunnel_data(client_socket, remote_socket)
 
-    except Exception:
+    except Exception as e:
+        #Talia: Log any errors that occur during the CONNECT handling process, including details about the client, target server, and the error message.
+        logger.log_error(
+            message="HTTPS tunnel failed",
+            error=str(e),
+            client_ip=client_address[0],
+            client_port=client_address[1],
+            target_host=host,
+            target_port=port,
+            method="CONNECT",
+            url=target
+        )
         send_error_response(client_socket, 502, "Bad Gateway", f"Could not open tunnel to {host}:{port}")
     finally:
+        #Talia: Log the closure of the HTTPS tunnel, including client and target details.
+        logger.log_https_event(
+            event="https_tunnel_closed",
+            client_ip=client_address[0],
+            client_port=client_address[1],
+            target_host=host,
+            target_port=port,
+            message="CONNECT tunnel closed"
+        )
+
         if remote_socket:
             remote_socket.close()
 
@@ -599,7 +700,14 @@ def handle_client(client_socket, client_address):
             if close_client:
                 break
 
-    except Exception:
+    except Exception as e:
+        #Talia: Log any exceptions that occur during client handling, including details about the client and the error message.
+        logger.log_error(
+            message="Client handling failed",
+            error=str(e),
+            client_ip=client_address[0],
+            client_port=client_address[1]
+        )
         try:
             send_error_response(client_socket, 500, "Internal Server Error", "Proxy internal error.")
         except Exception:
