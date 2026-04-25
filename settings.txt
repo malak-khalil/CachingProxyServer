@@ -1,4 +1,0 @@
-root: C:\Users\USP\OneDrive\Documents\CachingProxyServer 
-path: C:\Program Files\nodejs 
-arch: 64 
-proxy: none
