@@ -1,0 +1,221 @@
+# Caching Proxy Server – Demo and Testing Guide
+
+Important: Open **separate terminals** and keep servers running while testing.
+- **Terminal 1** → local test HTTP server
+- **Terminal 2** → proxy server
+- **Terminal 3** → testing commands with `curl.exe`
+
+## 1. Start the local HTTP test server
+
+In **Terminal 1**, run:
+
+```
+python -m http.server 8000
+```
+
+### Expected output
+You should see something like:
+
+```text
+Serving HTTP on :: port 8000 (http://[::]:8000/) ...
+```
+
+This means the local target server is running on port `8000`.
+
+---
+
+## 2. Start the proxy server
+
+In **Terminal 2**, activate the virtual environment if needed, then run:
+
+```
+python proxy_server.py
+```
+
+### Expected output
+You should see:
+
+```text
+[*] LAU Proxy LIVE on 127.0.0.1:8888
+```
+
+This means the proxy server is listening on port `8888`.
+
+---
+
+## 3. In **Terminal 3**, run:
+
+Test 1 – Direct local server access. 
+This test proves the local server itself works before using the proxy.
+```
+curl.exe http://127.0.0.1:8000 -v
+```
+### Expected result
+- connection succeeds
+- response is `HTTP/1.0 200 OK`
+- HTML content appears
+### This confirms that the local test website is running correctly and can now be used as the target server for the proxy.
+
+---
+
+Test 2 – HTTP forwarding through the proxy
+```
+curl.exe -x http://127.0.0.1:8888 http://127.0.0.1:8000 -v
+```
+### Expected result
+- curl connects to `127.0.0.1:8888`
+- request line is in proxy format, for example:
+GET http://127.0.0.1:8000/ HTTP/1.1
+- response returns `200 OK`
+- HTML content is returned
+
+### This proves:
+- the client connects to the proxy
+- the proxy parses the HTTP request
+- the proxy forwards it to the real server
+- the server response is relayed back to the client
+---
+
+Test 3 – POST request forwarding
+```
+curl.exe -x http://127.0.0.1:8888 -d "hello=world" http://127.0.0.1:8000 -v
+```
+### Expected result
+The local Python test server usually returns:
+HTTP/1.0 501 Unsupported method ('POST')
+### This proves the proxy can read and forward request bodies correctly. The `501` comes from the target server, not from the proxy.
+
+
+-------------------------------------------Aya-------------------------------------------------------------
+Test 4 – Blacklist test
+```
+curl.exe -x http://127.0.0.1:8888 http://example.com -v
+```
+### Expected result
+You should get:
+```text
+HTTP/1.1 403 Forbidden
+```html
+<h1>Access Denied</h1><p>Blacklisted site.</p>
+```
+### This proves the proxy checks the requested host against the blacklist and blocks disallowed websites.
+
+Test 5 – Admin dashboard
+```
+curl.exe -x http://127.0.0.1:8888 http://proxy.admin -v
+```
+### Expected result
+HTML for the admin dashboard should appear. It should show data such as:
+- uptime
+- active threads
+- total requests
+- blocked requests
+- cache entries
+- blacklist contents
+- live logs
+### This proves the project includes a working admin interface for monitoring the proxy.
+
+----------------------------------------------Talia--------------------------------------------------------
+Test 6 – HTTPS test
+### If using HTTPS tunnel only
+```
+curl.exe -x http://127.0.0.1:8888 https://google.com -v
+``
+
+### If using HTTPS MITM/decryption and certificate is not trusted yet
+```
+curl.exe -k -x http://127.0.0.1:8888 https://google.com -v
+```
+
+### Expected result
+You should see:
+```text
+HTTP/1.1 200 Connection Established
+```
+Then the HTTPS request should continue. A successful example is getting:
+```text
+HTTP/1.1 301 Moved Permanently
+Location: https://www.google.com/
+```
+### This proves the proxy can handle HTTPS traffic. If tunnel mode is used, it forwards encrypted traffic. If MITM mode is used, the proxy intercepts HTTPS and requires the client to trust the proxy CA certificate.
+
+
+Test 7 – Logging test
+
+```powershell
+Get-Content .\logs\proxy.log.jsonl
+```
+### Expected result
+The log should contain JSON entries such as:
+
+- `request_received`
+- `response_sent`
+- `cache_hit`
+- `https_tunnel_started`
+- `https_tunnel_closed`
+- `error`
+
+### This proves the proxy records structured logs for requests, responses, HTTPS events, and errors.
+
+
+
+Test 8 – Caching test
+
+```powershell
+curl.exe -x http://127.0.0.1:8888 http://127.0.0.1:8000 -v
+curl.exe -x http://127.0.0.1:8888 http://127.0.0.1:8000 -v
+```
+
+Then check:
+
+```powershell
+Get-Content .\logs\proxy.log.jsonl
+```
+
+and/or open the admin page again:
+
+```powershell
+curl.exe -x http://127.0.0.1:8888 http://proxy.admin -v
+```
+
+### Expected result
+You should see evidence such as:
+- cache entries increasing
+- `cache_hit` in the logs
+- repeated requests served faster or without contacting the origin again
+
+### This proves the proxy stores cacheable responses and reuses them when the same resource is requested again.
+
+----------------------------------------------Aya-----------------------------------------------------------------
+
+Test 9 – Threading / concurrency test
+
+Open **two different terminals** and run these at nearly the same time:
+
+### Terminal A
+```powershell
+curl.exe -x http://127.0.0.1:8888 http://httpbin.org/delay/3 -v
+```
+
+### Terminal B
+```powershell
+curl.exe -x http://127.0.0.1:8888 http://httpbin.org/delay/3 -v
+```
+
+### Expected result
+Both requests should be accepted and processed without one blocking the other completely.
+
+You can also show the admin page again:
+
+```powershell
+curl.exe -x http://127.0.0.1:8888 http://proxy.admin -v
+```
+
+and point to:
+
+- **Active Threads**
+- increasing **Total Requests**
+
+### This proves the proxy uses multithreading and can serve multiple clients concurrently.
+
+
