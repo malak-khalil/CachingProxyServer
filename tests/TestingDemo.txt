@@ -5,6 +5,9 @@ Important: Open **separate terminals** and keep servers running while testing.
 - **Terminal 2** → proxy server
 - **Terminal 3** → testing commands with `curl.exe`
 
+
+
+-----------------------------------Malak------------------------------------------------------------------
 ## 1. Start the local HTTP test server
 
 In **Terminal 1**, run:
@@ -115,80 +118,8 @@ HTML for the admin dashboard should appear. It should show data such as:
 - live logs
 ### This proves the project includes a working admin interface for monitoring the proxy.
 
-----------------------------------------------Talia--------------------------------------------------------
-Test 6 – HTTPS test
-### If using HTTPS tunnel only
-```
-curl.exe -x http://127.0.0.1:8888 https://google.com -v
-``
 
-### If using HTTPS MITM/decryption and certificate is not trusted yet
-```
-curl.exe -k -x http://127.0.0.1:8888 https://google.com -v
-```
-
-### Expected result
-You should see:
-```text
-HTTP/1.1 200 Connection Established
-```
-Then the HTTPS request should continue. A successful example is getting:
-```text
-HTTP/1.1 301 Moved Permanently
-Location: https://www.google.com/
-```
-### This proves the proxy can handle HTTPS traffic. If tunnel mode is used, it forwards encrypted traffic. If MITM mode is used, the proxy intercepts HTTPS and requires the client to trust the proxy CA certificate.
-
-
-Test 7 – Logging test
-
-```powershell
-Get-Content .\logs\proxy.log.jsonl
-```
-### Expected result
-The log should contain JSON entries such as:
-
-- `request_received`
-- `response_sent`
-- `cache_hit`
-- `https_tunnel_started`
-- `https_tunnel_closed`
-- `error`
-
-### This proves the proxy records structured logs for requests, responses, HTTPS events, and errors.
-
-
-
-Test 8 – Caching test
-
-```powershell
-curl.exe -x http://127.0.0.1:8888 http://127.0.0.1:8000 -v
-curl.exe -x http://127.0.0.1:8888 http://127.0.0.1:8000 -v
-```
-
-Then check:
-
-```powershell
-Get-Content .\logs\proxy.log.jsonl
-```
-
-and/or open the admin page again:
-
-```powershell
-curl.exe -x http://127.0.0.1:8888 http://proxy.admin -v
-```
-
-### Expected result
-You should see evidence such as:
-- cache entries increasing
-- `cache_hit` in the logs
-- repeated requests served faster or without contacting the origin again
-
-### This proves the proxy stores cacheable responses and reuses them when the same resource is requested again.
-
-----------------------------------------------Aya-----------------------------------------------------------------
-
-Test 9 – Threading / concurrency test
+Test 6 – Threading / concurrency test
 
 Open **two different terminals** and run these at nearly the same time:
 
@@ -217,5 +148,79 @@ and point to:
 - increasing **Total Requests**
 
 ### This proves the proxy uses multithreading and can serve multiple clients concurrently.
+
+
+
+
+----------------------------------------------Talia--------------------------------------------------------
+Test 7 – HTTPS test
+### If using HTTPS tunnel only
+```
+curl.exe -x http://127.0.0.1:8888 https://google.com -v
+``
+
+### If using HTTPS MITM/decryption and certificate is not trusted yet
+```
+curl.exe -k -x http://127.0.0.1:8888 https://google.com -v
+```
+
+### Expected result
+You should see:
+```text
+HTTP/1.1 200 Connection Established
+```
+Then the HTTPS request should continue. A successful example is getting:
+```text
+HTTP/1.1 301 Moved Permanently
+Location: https://www.google.com/
+```
+### This proves the proxy can handle HTTPS traffic. If tunnel mode is used, it forwards encrypted traffic. If MITM mode is used, the proxy intercepts HTTPS and requires the client to trust the proxy CA certificate.
+
+
+Test 8 – Logging test
+
+```powershell
+Get-Content .\logs\proxy.log.jsonl
+```
+### Expected result
+The log should contain JSON entries such as:
+
+- `request_received`
+- `response_sent`
+- `cache_hit`
+- `https_tunnel_started`
+- `https_tunnel_closed`
+- `error`
+
+### This proves the proxy records structured logs for requests, responses, HTTPS events, and errors.
+
+
+
+Test 9 – Caching test
+
+```powershell
+curl.exe -x http://127.0.0.1:8888 http://127.0.0.1:8000 -v
+curl.exe -x http://127.0.0.1:8888 http://127.0.0.1:8000 -v
+```
+
+Then check:
+
+```powershell
+Get-Content .\logs\proxy.log.jsonl
+```
+
+and/or open the admin page again:
+
+```powershell
+curl.exe -x http://127.0.0.1:8888 http://proxy.admin -v
+```
+
+### Expected result
+You should see evidence such as:
+- cache entries increasing
+- `cache_hit` in the logs
+- repeated requests served faster or without contacting the origin again
+
+### This proves the proxy stores cacheable responses and reuses them when the same resource is requested again.
 
 
